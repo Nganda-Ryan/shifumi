@@ -5,9 +5,38 @@ import { v4 as uuidv4 } from "uuid";
 import { WebSocketMessage, Player, Game, Invitation } from "@/types/GameState";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:3001";
+const SESSION_ID_KEY = "shifumi_session_id";
+
+// Detect if running on Vercel preview deployment
+// Preview URLs look like: project-git-branch-team.vercel.app or project-hash-team.vercel.app
+function isVercelPreview(): boolean {
+  if (typeof window === "undefined") return false;
+  const hostname = window.location.hostname;
+  // Check if it's a vercel.app domain but not the main production domain
+  // Production is typically just "project.vercel.app" or custom domain
+  const isVercelDomain = hostname.endsWith(".vercel.app");
+  const isPreviewPattern = isVercelDomain && (
+    hostname.includes("-git-") || // git branch preview: project-git-branch-team.vercel.app
+    /^[a-z0-9]+-[a-z0-9]{9}-/.test(hostname) // commit preview: project-hash123456-team.vercel.app
+  );
+  return isPreviewPattern;
+}
+
+// Get or create a persistent session ID
+function getSessionId(): string {
+  if (typeof window === "undefined") return uuidv4();
+
+  let sessionId = localStorage.getItem(SESSION_ID_KEY);
+  if (!sessionId) {
+    sessionId = uuidv4();
+    localStorage.setItem(SESSION_ID_KEY, sessionId);
+  }
+  return sessionId;
+}
 
 interface UseWebSocketReturn {
   isConnected: boolean;
+  isConnecting: boolean;
   players: Player[];
   currentGame: Game | null;
   invitations: Invitation[];
@@ -31,6 +60,7 @@ interface UseWebSocketReturn {
 
 export function useWebSocket(): UseWebSocketReturn {
   const [isConnected, setIsConnected] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [players, setPlayers] = useState<Player[]>([]);
   const [currentGame, setCurrentGame] = useState<Game | null>(null);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
@@ -43,24 +73,52 @@ export function useWebSocket(): UseWebSocketReturn {
   const [preCountdownTimestamp, setPreCountdownTimestamp] = useState<number | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const sessionIdRef = useRef<string>(uuidv4());
+  const sessionIdRef = useRef<string>("");
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const maxReconnectAttempts = 5;
+  const connectionTimeout = 45000; // 45s timeout for cold start
 
   const connect = useCallback(
     (username?: string) => {
+      // Don't connect on Vercel preview deployments to avoid ghost players
+      if (isVercelPreview()) {
+        console.log("Skipping WebSocket connection on Vercel preview");
+        setError("Preview mode - WebSocket disabled");
+        return;
+      }
+
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         return;
       }
+
+      setIsConnecting(true);
+      setError(null);
 
       try {
         const ws = new WebSocket(WS_URL);
         wsRef.current = ws;
 
+        // Set connection timeout (for cold starts)
+        connectionTimeoutRef.current = setTimeout(() => {
+          if (!isConnected && wsRef.current?.readyState !== WebSocket.OPEN) {
+            console.log("Connection timeout - server may be starting");
+            setError("Server is waking up... Please wait or refresh.");
+            setIsConnecting(false);
+            ws.close();
+          }
+        }, connectionTimeout);
+
         ws.onopen = () => {
           console.log("WebSocket connected");
+          // Clear connection timeout
+          if (connectionTimeoutRef.current) {
+            clearTimeout(connectionTimeoutRef.current);
+            connectionTimeoutRef.current = null;
+          }
           setIsConnected(true);
+          setIsConnecting(false);
           setError(null);
           reconnectAttemptsRef.current = 0;
 
@@ -87,12 +145,18 @@ export function useWebSocket(): UseWebSocketReturn {
 
         ws.onerror = (error) => {
           console.error("WebSocket error:", error);
-          setError("Connection error");
+          setError("Connection error - retrying...");
         };
 
         ws.onclose = () => {
           console.log("WebSocket disconnected");
+          // Clear connection timeout
+          if (connectionTimeoutRef.current) {
+            clearTimeout(connectionTimeoutRef.current);
+            connectionTimeoutRef.current = null;
+          }
           setIsConnected(false);
+          setIsConnecting(false);
           wsRef.current = null;
 
           // Attempt to reconnect
@@ -108,6 +172,7 @@ export function useWebSocket(): UseWebSocketReturn {
         };
       } catch (err) {
         console.error("Error creating WebSocket:", err);
+        setIsConnecting(false);
         setError("Failed to connect to server");
       }
     },
@@ -118,6 +183,10 @@ export function useWebSocket(): UseWebSocketReturn {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
+    }
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
     }
     if (wsRef.current) {
       wsRef.current.close();
@@ -327,8 +396,10 @@ export function useWebSocket(): UseWebSocketReturn {
 
   // Auto-connect on mount with saved username
   useEffect(() => {
-    const displayName = localStorage.getItem("shifumi_displayname") || undefined;
+    // Initialize sessionId from localStorage (persistent across tabs/reloads)
+    sessionIdRef.current = getSessionId();
 
+    const displayName = localStorage.getItem("shifumi_displayname") || undefined;
     connect(displayName);
     return () => {
       disconnect();
@@ -337,6 +408,7 @@ export function useWebSocket(): UseWebSocketReturn {
 
   return {
     isConnected,
+    isConnecting,
     players,
     currentGame,
     invitations,

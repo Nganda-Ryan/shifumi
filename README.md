@@ -160,24 +160,42 @@ shi-fu-mi/
 
 ## Deploiement
 
-### Render.com
+### Render.com (Backend)
 
 Le projet inclut un fichier `render.yaml` pour un deploiement sur Render.com :
 
 ```bash
 # Le blueprint deploie automatiquement :
 # - shi-fu-mi-server (WebSocket backend)
-# - shi-fu-mi-frontend (Next.js frontend)
 ```
 
-### Vercel (Frontend uniquement)
+**Note** : Sur le plan gratuit de Render, le serveur s'eteint apres 15 minutes d'inactivite. Un cron job Vercel est configure pour le maintenir actif.
+
+### Vercel (Frontend)
 
 ```bash
 # Build et deploiement automatique
 vercel --prod
 ```
 
-N'oubliez pas de configurer `NEXT_PUBLIC_WS_URL` vers votre serveur WebSocket de production.
+**Configuration requise** :
+1. Configurer `NEXT_PUBLIC_WS_URL` avec l'URL du serveur WebSocket (ex: `wss://shi-fu-mi-server.onrender.com`)
+2. Le cron job `/api/cron/keep-alive` ping le serveur toutes les 10 minutes automatiquement
+
+### Cron Keep-Alive
+
+Le fichier `vercel.json` configure un cron job qui s'execute toutes les 10 minutes pour empecher le serveur Render de s'eteindre :
+
+```json
+{
+  "crons": [
+    {
+      "path": "/api/cron/keep-alive",
+      "schedule": "*/10 * * * *"
+    }
+  ]
+}
+```
 
 ## Regles du Jeu
 

@@ -165,7 +165,7 @@ const COUNTRIES = [
 
 
 export default function Lobby() {
-  const { players, playerId, invitePlayer, isConnected, updateUsername } = useGame();
+  const { players, playerId, invitePlayer, isConnected, isConnecting, updateUsername, error } = useGame();
 
   const [username, setUsername] = useState("");
   const [nationality, setNationality] = useState("");
@@ -218,7 +218,29 @@ export default function Lobby() {
   if (!isConnected) {
     return (
       <div className="max-w-md mx-auto p-4 bg-black/40 border border-yellow-500/30 rounded-lg">
-        <p className="text-yellow-200">Connecting to server...</p>
+        <div className="flex items-center gap-3">
+          {isConnecting && (
+            <div className="w-5 h-5 border-2 border-yellow-500 border-t-transparent rounded-full animate-spin"></div>
+          )}
+          <div>
+            {error ? (
+              <>
+                <p className="text-red-400">{error}</p>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="mt-2 px-4 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-200 text-sm rounded transition-colors"
+                >
+                  Refresh page
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-yellow-200">Connecting to server...</p>
+                <p className="text-yellow-200/60 text-sm">First connection may take up to 30s</p>
+              </>
+            )}
+          </div>
+        </div>
       </div>
     );
   }

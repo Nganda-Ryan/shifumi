@@ -82,10 +82,21 @@ function handleConnect(socket: SocketWithPlayer, message: ConnectMessage): void 
   let player = PlayerService.getPlayerBySessionId(sessionId);
 
   const socketId = (socket as any).id || "";
-  
+
   if (player) {
+    // Close any existing socket for this player (prevents duplicate connections from multiple tabs)
+    const existingSocket = findSocketByPlayerId(player.id);
+    if (existingSocket && existingSocket !== socket) {
+      console.log(`Closing duplicate connection for player ${player.id}`);
+      existingSocket.close(1000, "New connection from same session");
+    }
+
     // Update socket ID for existing player
     PlayerService.updatePlayerSocketId(player.id, socketId);
+    // Update username if provided (reconnection with updated profile)
+    if (username) {
+      PlayerService.updatePlayerUsername(player.id, username);
+    }
     socket.playerId = player.id;
     socket.sessionId = sessionId;
   } else {
@@ -561,7 +572,10 @@ function findSocketByPlayerId(playerId: string): SocketWithPlayer | undefined {
 }
 
 function broadcastPlayersList(): void {
-  const availablePlayers = PlayerService.getAvailablePlayers();
+  // Only include players who have set a username (exclude anonymous/unknown players)
+  const availablePlayers = PlayerService.getAvailablePlayers().filter(
+    (player) => player.username && player.username.trim().length > 0
+  );
   const message: ServerMessage = {
     type: "players:list",
     payload: { players: availablePlayers },

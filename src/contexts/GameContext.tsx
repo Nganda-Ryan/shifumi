@@ -6,6 +6,7 @@ import { Player, Game, Invitation } from "@/types/GameState";
 
 interface GameContextType {
   isConnected: boolean;
+  isConnecting: boolean;
   players: Player[];
   currentGame: Game | null;
   invitations: Invitation[];

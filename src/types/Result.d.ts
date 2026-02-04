@@ -1,0 +1,1 @@
+export type Result = null | "Draw" | "Win" | "Loose";

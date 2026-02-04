@@ -1,0 +1,1 @@
+export type Move = null | "stone" | "paper" | "scissors";

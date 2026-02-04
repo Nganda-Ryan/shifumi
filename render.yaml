@@ -1,0 +1,29 @@
+# Render Blueprint - Configuration de déploiement
+# https://render.com/docs/blueprint-spec
+
+services:
+  # Backend WebSocket Server
+  - type: web
+    name: shi-fu-mi-server
+    runtime: node
+    rootDir: server
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: WS_PORT
+        value: 10000
+    healthCheckPath: /
+
+  # Frontend Next.js (optionnel - peut être sur Vercel)
+  - type: web
+    name: shi-fu-mi-frontend
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_WS_URL
+        sync: false  # À configurer manuellement avec l'URL du backend

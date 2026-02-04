@@ -1,0 +1,26 @@
+.countdown {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    animation: anim 1.04s ease-out infinite;
+    font-weight: 900;
+}
+@keyframes anim {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    20% {
+        transform: scale(5);
+        opacity: 1;
+    }
+    70% {
+        transform: scale(6);
+        opacity: 1;
+    }
+    100% {
+        transform: scale(7);
+        opacity: 0;
+    }
+}

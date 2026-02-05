@@ -16,7 +16,7 @@ interface GameContextType {
   roundStarted: boolean;
   roundStartTimestamp: number | null;
   serverTimeOffset: number;
-  isReady: boolean;
+  readyTimestamp: number | null;
   invitePlayer: (targetPlayerId: string) => void;
   acceptInvitation: (invitationId: string) => void;
   declineInvitation: (invitationId: string) => void;

@@ -50,7 +50,7 @@ interface UseFirebaseGameReturn {
   roundStarted: boolean;
   roundStartTimestamp: number | null;
   serverTimeOffset: number;
-  isReady: boolean;
+  readyTimestamp: number | null;
   invitePlayer: (targetPlayerId: string) => void;
   acceptInvitation: (invitationId: string) => void;
   declineInvitation: (invitationId: string) => void;
@@ -87,7 +87,7 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
   const [roundStarted, setRoundStarted] = useState(false);
   const [roundStartTimestamp, setRoundStartTimestamp] = useState<number | null>(null);
   const [serverTimeOffset, setServerTimeOffset] = useState<number>(0);
-  const [isReady, setIsReady] = useState(false);
+  const [readyTimestamp, setReadyTimestamp] = useState<number | null>(null);
 
   const sessionIdRef = useRef<string>("");
   const playerIdRef = useRef<string | null>(null);
@@ -258,8 +258,8 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
 
       // Handle round status
       if (gameData.roundStatus === "ready") {
-        // Show "Ready?" phase
-        setIsReady(true);
+        // Show "Ready?" phase - store timestamp for UI sync
+        setReadyTimestamp(gameData.readyTimestamp);
         setRoundStarted(false);
 
         // Clear any existing timeouts
@@ -277,14 +277,18 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
           const timeUntilPlay = Math.max(0, readyDuration - elapsed);
 
           readyTimeoutRef.current = setTimeout(async () => {
+            // Get current server time and add sync delay so both players start together
+            const SYNC_DELAY = 150; // 150ms buffer for network latency
+            const startTime = Date.now() + serverTimeOffset + SYNC_DELAY;
+
             await update(gameRef, {
               roundStatus: "playing",
-              roundStartTimestamp: serverTimestamp(),
+              roundStartTimestamp: startTime,
             });
           }, timeUntilPlay);
         }
       } else if (gameData.roundStatus === "playing") {
-        setIsReady(false);
+        setReadyTimestamp(null);
         setRoundStarted(true);
         setRoundStartTimestamp(gameData.roundStartTimestamp);
 
@@ -349,7 +353,7 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
           readyTimeoutRef.current = null;
         }
 
-        setIsReady(false);
+        setReadyTimestamp(null);
 
         // Process result for display
         const moves = gameData.moves || {};
@@ -389,7 +393,7 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
           clearTimeout(readyTimeoutRef.current);
           readyTimeoutRef.current = null;
         }
-        setIsReady(false);
+        setReadyTimestamp(null);
         setRoundStarted(false);
       }
     });
@@ -638,7 +642,7 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
       setCurrentGame(null);
       setRoundStarted(false);
       setRoundResult(null);
-      setIsReady(false);
+      setReadyTimestamp(null);
       currentGameIdRef.current = null;
 
     } catch (err) {
@@ -716,7 +720,7 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
     roundStarted,
     roundStartTimestamp,
     serverTimeOffset,
-    isReady,
+    readyTimestamp,
     invitePlayer,
     acceptInvitation,
     declineInvitation,

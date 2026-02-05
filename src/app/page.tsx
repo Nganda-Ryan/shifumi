@@ -34,7 +34,7 @@ export default function Home() {
     roundStarted,
     roundStartTimestamp,
     serverTimeOffset,
-    isReady,
+    readyTimestamp,
   } = useGame();
 
   const DEFAULT_MOVE: Move = "stone";
@@ -44,7 +44,10 @@ export default function Home() {
   const [roundResult, setRoundResult] = useState<Result>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resultShown, setResultShown] = useState(false);
-  const [syncedCountdown, setSyncedCountdown] = useState<number>(3);
+  const [syncedCountdown, setSyncedCountdown] = useState<number | null>(null);
+  const [isReady, setIsReady] = useState(false);
+
+  const READY_DURATION = 900; // Must match the value in useFirebaseGame.ts
 
   // Update URL when game starts
   useEffect(() => {
@@ -91,6 +94,29 @@ export default function Home() {
     }
   }, [serverRoundResult, currentGame, playerId]);
 
+  // Synchronize "Ready?" phase based on server time
+  useEffect(() => {
+    if (!readyTimestamp) {
+      setIsReady(false);
+      return;
+    }
+
+    const updateReady = () => {
+      const serverTime = Date.now() + serverTimeOffset;
+      const elapsed = serverTime - readyTimestamp;
+      const shouldShowReady = elapsed < READY_DURATION;
+      setIsReady(shouldShowReady);
+    };
+
+    // Update immediately
+    updateReady();
+
+    // Update frequently for precise sync
+    const interval = setInterval(updateReady, 50);
+
+    return () => clearInterval(interval);
+  }, [readyTimestamp, serverTimeOffset]);
+
   // Handle round started from server
   useEffect(() => {
     if (roundStarted && roundStartTimestamp) {
@@ -98,28 +124,31 @@ export default function Home() {
       setOpponentMove(null);
       setResultShown(false);
 
-      // Calculate initial countdown value using corrected server time
-      const serverTime = Date.now() + serverTimeOffset;
-      const elapsed = serverTime - roundStartTimestamp;
-      const remaining = Math.max(1, Math.ceil((3000 - elapsed) / 1000));
-      setSyncedCountdown(remaining);
-
       // Send default move initially (user can change it during countdown)
       if (currentGame) {
         sendMove(currentGame.id, userMove || DEFAULT_MOVE);
       }
     }
-  }, [roundStarted, roundStartTimestamp, currentGame, userMove, sendMove, serverTimeOffset]);
+  }, [roundStarted, roundStartTimestamp, currentGame, userMove, sendMove]);
 
   // Synchronize countdown periodically during round (using corrected server time)
   useEffect(() => {
     if (!roundStarted || !roundStartTimestamp) {
+      setSyncedCountdown(null); // Reset when not in countdown phase
       return;
     }
 
     const updateCountdown = () => {
       const serverTime = Date.now() + serverTimeOffset;
       const elapsed = serverTime - roundStartTimestamp;
+
+      // Don't show countdown until server time reaches roundStartTimestamp
+      // This ensures both players start the countdown at the same moment
+      if (elapsed < 0) {
+        setSyncedCountdown(null); // Still waiting for sync
+        return;
+      }
+
       const remaining = Math.max(0, Math.ceil((3000 - elapsed) / 1000));
       setSyncedCountdown(remaining);
     };
@@ -127,8 +156,8 @@ export default function Home() {
     // Update immediately
     updateCountdown();
 
-    // Update every 100ms for smooth synchronization
-    const interval = setInterval(updateCountdown, 100);
+    // Update every 50ms for precise synchronization
+    const interval = setInterval(updateCountdown, 50);
 
     return () => clearInterval(interval);
   }, [roundStarted, roundStartTimestamp, serverTimeOffset]);
@@ -393,8 +422,8 @@ export default function Home() {
           </div>
         )}
 
-        {/* Ready? Phase */}
-        {isReady && currentGame && (
+        {/* Ready? Phase - show until countdown actually starts */}
+        {(isReady || (roundStarted && syncedCountdown === null)) && currentGame && (
           <div className="flex justify-center mt-6">
             <div className="text-4xl md:text-6xl font-bold text-yellow-400 animate-pulse">
               Ready?
@@ -403,7 +432,7 @@ export default function Home() {
         )}
 
         {/* SHI FU MI Countdown */}
-        {roundStarted && currentGame && roundStartTimestamp && !isReady && (
+        {roundStarted && currentGame && roundStartTimestamp && !isReady && syncedCountdown !== null && (
           <CountDown
             key={`countdown-${currentGame.id}-${currentGame.currentRound}-${roundStartTimestamp}`}
             startFrom={syncedCountdown}

@@ -46,7 +46,7 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resultShown, setResultShown] = useState(false);
   const [moveSentThisRound, setMoveSentThisRound] = useState(false);
-  const [syncedPreCountdown, setSyncedPreCountdown] = useState<number>(4);
+  const [syncedPreCountdown, setSyncedPreCountdown] = useState<number>(5);
   const [syncedCountdown, setSyncedCountdown] = useState<number>(3);
 
   // Update URL when game starts

@@ -1,0 +1,32 @@
+{
+  "rules": {
+    "players": {
+      "$playerId": {
+        ".read": true,
+        ".write": true
+      }
+    },
+    "games": {
+      "$gameId": {
+        ".read": true,
+        ".write": true,
+        "moves": {
+          "player1": {
+            ".write": true,
+            ".validate": "newData.isString() && (newData.val() === 'stone' || newData.val() === 'paper' || newData.val() === 'scissors')"
+          },
+          "player2": {
+            ".write": true,
+            ".validate": "newData.isString() && (newData.val() === 'stone' || newData.val() === 'paper' || newData.val() === 'scissors')"
+          }
+        }
+      }
+    },
+    "invitations": {
+      "$invitationId": {
+        ".read": true,
+        ".write": true
+      }
+    }
+  }
+}

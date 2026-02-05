@@ -2,7 +2,6 @@
 "use client";
 import Card from "@/components/Card/Card";
 import CountDown from "@/components/Counter/CountDown";
-import PreCountdown from "@/components/PreCountdown/PreCountdown";
 import Lobby from "@/components/Lobby/Lobby";
 import InvitationModal from "@/components/Invitation/InvitationModal";
 import ErrorMessage from "@/components/ErrorMessage/ErrorMessage";
@@ -32,10 +31,8 @@ export default function Home() {
     isConnected,
     error,
     roundResult: serverRoundResult,
-    roundStarting,
     roundStarted,
     roundStartTimestamp,
-    preCountdownTimestamp,
   } = useGame();
 
   const DEFAULT_MOVE: Move = "stone";
@@ -45,8 +42,6 @@ export default function Home() {
   const [roundResult, setRoundResult] = useState<Result>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resultShown, setResultShown] = useState(false);
-  const [moveSentThisRound, setMoveSentThisRound] = useState(false);
-  const [syncedPreCountdown, setSyncedPreCountdown] = useState<number>(5);
   const [syncedCountdown, setSyncedCountdown] = useState<number>(3);
 
   // Update URL when game starts
@@ -94,21 +89,6 @@ export default function Home() {
     }
   }, [serverRoundResult, currentGame, playerId]);
 
-  // Handle round starting
-  useEffect(() => {
-    if (roundStarting && preCountdownTimestamp) {
-      setRoundResult(null);
-      setOpponentMove(null);
-      setResultShown(false);
-      setMoveSentThisRound(false);
-      setUserMove(DEFAULT_MOVE);
-
-      const elapsed = Date.now() - preCountdownTimestamp;
-      const remaining = Math.max(1, Math.ceil((5000 - elapsed) / 1000));
-      setSyncedPreCountdown(remaining);
-    }
-  }, [roundStarting, preCountdownTimestamp]);
-
   // Handle round started from server
   useEffect(() => {
     if (roundStarted && roundStartTimestamp) {
@@ -116,14 +96,37 @@ export default function Home() {
       setOpponentMove(null);
       setResultShown(false);
 
+      // Calculate initial countdown value
       const elapsed = Date.now() - roundStartTimestamp;
       const remaining = Math.max(1, Math.ceil((3000 - elapsed) / 1000));
       setSyncedCountdown(remaining);
 
-      if (currentGame && !moveSentThisRound) {
+      // Send default move initially (user can change it during countdown)
+      if (currentGame) {
         sendMove(currentGame.id, userMove || DEFAULT_MOVE);
       }
     }
+  }, [roundStarted, roundStartTimestamp, currentGame, userMove, sendMove]);
+
+  // Synchronize countdown periodically during round
+  useEffect(() => {
+    if (!roundStarted || !roundStartTimestamp) {
+      return;
+    }
+
+    const updateCountdown = () => {
+      const elapsed = Date.now() - roundStartTimestamp;
+      const remaining = Math.max(0, Math.ceil((3000 - elapsed) / 1000));
+      setSyncedCountdown(remaining);
+    };
+
+    // Update immediately
+    updateCountdown();
+
+    // Update every 100ms for smooth synchronization
+    const interval = setInterval(updateCountdown, 100);
+
+    return () => clearInterval(interval);
   }, [roundStarted, roundStartTimestamp]);
 
   // Handle error messages
@@ -175,7 +178,6 @@ export default function Home() {
     setRoundResult(null);
     setOpponentMove(null);
     setResultShown(false);
-    setMoveSentThisRound(false);
     setUserMove(DEFAULT_MOVE);
 
     startRoundOnServer(currentGame.id);
@@ -185,8 +187,6 @@ export default function Home() {
     if (!currentGame) return;
     leaveGame(currentGame.id);
   };
-
-  const handlePreCountdownEnd = (): void => {};
 
   const getRoundStyle = (): ResultStyle => {
     if (!resultShown || !roundResult) {
@@ -224,11 +224,12 @@ export default function Home() {
     const move: Move = event.currentTarget.dataset.move as Move;
     if (!move) return;
 
+    // Update UI immediately
     setUserMove(move);
 
-    if (roundStarting || roundStarted) {
+    // Allow multiple changes during countdown - send move if round is active
+    if (roundStarted) {
       sendMove(currentGame.id, move);
-      setMoveSentThisRound(true);
     }
   };
 
@@ -370,7 +371,7 @@ export default function Home() {
         </div>
 
         {/* Start Round Button */}
-        {!roundStarting && !roundStarted && !resultShown && currentGame.player1.id === playerId && (
+        {!roundStarted && !resultShown && currentGame.player1.id === playerId && (
           <div className="flex justify-center mt-6">
             <button
               onClick={handleStartRound}
@@ -382,19 +383,10 @@ export default function Home() {
         )}
 
         {/* Waiting message for player2 */}
-        {!roundStarting && !roundStarted && !resultShown && currentGame.player1.id !== playerId && (
+        {!roundStarted && !resultShown && currentGame.player1.id !== playerId && (
           <div className="flex justify-center mt-6">
             <p className="text-gray-400">Waiting for opponent to start the round...</p>
           </div>
-        )}
-
-        {/* Pre-countdown */}
-        {roundStarting && currentGame && preCountdownTimestamp && (
-          <PreCountdown
-            key={`precountdown-${currentGame.id}-${currentGame.currentRound}-${preCountdownTimestamp}`}
-            startFrom={syncedPreCountdown}
-            onPreCountdownEnd={handlePreCountdownEnd}
-          />
         )}
 
         {/* SHI FU MI Countdown */}

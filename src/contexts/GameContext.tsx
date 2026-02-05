@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, ReactNode } from "react";
-import { useWebSocket } from "@/hooks/useWebSocket";
+import { useFirebaseGame } from "@/hooks/useFirebaseGame";
 import { Player, Game, Invitation } from "@/types/GameState";
 
 interface GameContextType {
@@ -13,10 +13,8 @@ interface GameContextType {
   playerId: string | null;
   error: string | null;
   roundResult: { result: string; yourResult: string; scores: { player1: number; player2: number } } | null;
-  roundStarting: boolean;
   roundStarted: boolean;
   roundStartTimestamp: number | null;
-  preCountdownTimestamp: number | null;
   invitePlayer: (targetPlayerId: string) => void;
   acceptInvitation: (invitationId: string) => void;
   declineInvitation: (invitationId: string) => void;
@@ -31,9 +29,9 @@ interface GameContextType {
 const GameContext = createContext<GameContextType | undefined>(undefined);
 
 export function GameProvider({ children }: { children: ReactNode }) {
-  const websocket = useWebSocket();
+  const firebaseGame = useFirebaseGame();
 
-  return <GameContext.Provider value={websocket}>{children}</GameContext.Provider>;
+  return <GameContext.Provider value={firebaseGame}>{children}</GameContext.Provider>;
 }
 
 export function useGame() {

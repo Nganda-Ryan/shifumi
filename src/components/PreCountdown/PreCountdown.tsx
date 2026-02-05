@@ -23,7 +23,8 @@ const PreCountdown = ({ onPreCountdownEnd, startFrom }: props) => {
 
   const getMessage = useCallback((index: number) => {
     if (index <= 0) return "";
-    if (index > 3) return "Le jeu commencera dans...";
+    if (index > 4) return "";
+    if (index === 4) return "Start in";
     return index.toString();
   }, []);
 

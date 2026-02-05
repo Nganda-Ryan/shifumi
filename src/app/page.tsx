@@ -33,6 +33,8 @@ export default function Home() {
     roundResult: serverRoundResult,
     roundStarted,
     roundStartTimestamp,
+    serverTimeOffset,
+    isReady,
   } = useGame();
 
   const DEFAULT_MOVE: Move = "stone";
@@ -96,8 +98,9 @@ export default function Home() {
       setOpponentMove(null);
       setResultShown(false);
 
-      // Calculate initial countdown value
-      const elapsed = Date.now() - roundStartTimestamp;
+      // Calculate initial countdown value using corrected server time
+      const serverTime = Date.now() + serverTimeOffset;
+      const elapsed = serverTime - roundStartTimestamp;
       const remaining = Math.max(1, Math.ceil((3000 - elapsed) / 1000));
       setSyncedCountdown(remaining);
 
@@ -106,16 +109,17 @@ export default function Home() {
         sendMove(currentGame.id, userMove || DEFAULT_MOVE);
       }
     }
-  }, [roundStarted, roundStartTimestamp, currentGame, userMove, sendMove]);
+  }, [roundStarted, roundStartTimestamp, currentGame, userMove, sendMove, serverTimeOffset]);
 
-  // Synchronize countdown periodically during round
+  // Synchronize countdown periodically during round (using corrected server time)
   useEffect(() => {
     if (!roundStarted || !roundStartTimestamp) {
       return;
     }
 
     const updateCountdown = () => {
-      const elapsed = Date.now() - roundStartTimestamp;
+      const serverTime = Date.now() + serverTimeOffset;
+      const elapsed = serverTime - roundStartTimestamp;
       const remaining = Math.max(0, Math.ceil((3000 - elapsed) / 1000));
       setSyncedCountdown(remaining);
     };
@@ -127,7 +131,7 @@ export default function Home() {
     const interval = setInterval(updateCountdown, 100);
 
     return () => clearInterval(interval);
-  }, [roundStarted, roundStartTimestamp]);
+  }, [roundStarted, roundStartTimestamp, serverTimeOffset]);
 
   // Handle error messages
   useEffect(() => {
@@ -371,7 +375,7 @@ export default function Home() {
         </div>
 
         {/* Start Round Button */}
-        {!roundStarted && !resultShown && currentGame.player1.id === playerId && (
+        {!roundStarted && !resultShown && !isReady && currentGame.player1.id === playerId && (
           <div className="flex justify-center mt-6">
             <button
               onClick={handleStartRound}
@@ -383,14 +387,23 @@ export default function Home() {
         )}
 
         {/* Waiting message for player2 */}
-        {!roundStarted && !resultShown && currentGame.player1.id !== playerId && (
+        {!roundStarted && !resultShown && !isReady && currentGame.player1.id !== playerId && (
           <div className="flex justify-center mt-6">
             <p className="text-gray-400">Waiting for opponent to start the round...</p>
           </div>
         )}
 
+        {/* Ready? Phase */}
+        {isReady && currentGame && (
+          <div className="flex justify-center mt-6">
+            <div className="text-4xl md:text-6xl font-bold text-yellow-400 animate-pulse">
+              Ready?
+            </div>
+          </div>
+        )}
+
         {/* SHI FU MI Countdown */}
-        {roundStarted && currentGame && roundStartTimestamp && (
+        {roundStarted && currentGame && roundStartTimestamp && !isReady && (
           <CountDown
             key={`countdown-${currentGame.id}-${currentGame.currentRound}-${roundStartTimestamp}`}
             startFrom={syncedCountdown}

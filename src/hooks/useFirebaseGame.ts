@@ -13,6 +13,7 @@ import {
   onDisconnect,
   off,
   DataSnapshot,
+  serverTimestamp,
 } from "firebase/database";
 import { database } from "@/lib/firebase";
 import { Player, Game, Invitation } from "@/types/GameState";
@@ -48,6 +49,8 @@ interface UseFirebaseGameReturn {
   roundResult: RoundResult | null;
   roundStarted: boolean;
   roundStartTimestamp: number | null;
+  serverTimeOffset: number;
+  isReady: boolean;
   invitePlayer: (targetPlayerId: string) => void;
   acceptInvitation: (invitationId: string) => void;
   declineInvitation: (invitationId: string) => void;
@@ -83,13 +86,15 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
   const [roundResult, setRoundResult] = useState<RoundResult | null>(null);
   const [roundStarted, setRoundStarted] = useState(false);
   const [roundStartTimestamp, setRoundStartTimestamp] = useState<number | null>(null);
+  const [serverTimeOffset, setServerTimeOffset] = useState<number>(0);
+  const [isReady, setIsReady] = useState(false);
 
   const sessionIdRef = useRef<string>("");
   const playerIdRef = useRef<string | null>(null);
   const currentGameIdRef = useRef<string | null>(null);
   const hasProcessedResultRef = useRef<string | null>(null);
-  const checkResultIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const checkAndCalculateResultRef = useRef<((gameId: string) => Promise<void>) | null>(null);
+  const resultTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const readyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Connect to Firebase
   const connect = useCallback(async (username?: string) => {
@@ -149,6 +154,13 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
         }
       });
 
+      // Listen for server time offset (for synchronized countdown)
+      const offsetRef = ref(database, ".info/serverTimeOffset");
+      onValue(offsetRef, (snap) => {
+        const offset = snap.val() || 0;
+        setServerTimeOffset(offset);
+      });
+
       // Listen for players list
       onValue(playersRef, (snapshot) => {
         const playersList: Player[] = [];
@@ -195,6 +207,7 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
     off(ref(database, "players"));
     off(ref(database, "invitations"));
     off(ref(database, ".info/connected"));
+    off(ref(database, ".info/serverTimeOffset"));
 
     setIsConnected(false);
     setPlayers([]);
@@ -203,6 +216,11 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
     setPlayerId(null);
     playerIdRef.current = null;
   }, []);
+
+  // Get estimated server time (corrected for clock skew)
+  const getServerTime = useCallback(() => {
+    return Date.now() + serverTimeOffset;
+  }, [serverTimeOffset]);
 
   // Start listening to game updates
   const startGameListener = useCallback((gameId: string) => {
@@ -213,10 +231,9 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
     onValue(gameRef, (snapshot: DataSnapshot) => {
       if (!snapshot.exists()) {
         // Game was deleted (opponent left)
-        // Clear interval
-        if (checkResultIntervalRef.current) {
-          clearInterval(checkResultIntervalRef.current);
-          checkResultIntervalRef.current = null;
+        if (resultTimeoutRef.current) {
+          clearTimeout(resultTimeoutRef.current);
+          resultTimeoutRef.current = null;
         }
         setCurrentGame(null);
         setRoundStarted(false);
@@ -239,35 +256,106 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
 
       setCurrentGame(game);
 
-      // Handle round status (directly go to playing, no pre-countdown phase)
-      if (gameData.roundStatus === "playing") {
+      // Handle round status
+      if (gameData.roundStatus === "ready") {
+        // Show "Ready?" phase
+        setIsReady(true);
+        setRoundStarted(false);
+
+        // Clear any existing timeouts
+        if (readyTimeoutRef.current) {
+          clearTimeout(readyTimeoutRef.current);
+          readyTimeoutRef.current = null;
+        }
+
+        // Only player1 transitions to "playing" after 900ms
+        const isPlayer1 = gameData.player1.id === playerIdRef.current;
+        if (isPlayer1 && gameData.readyTimestamp) {
+          const serverTime = getServerTime();
+          const elapsed = serverTime - gameData.readyTimestamp;
+          const readyDuration = 900; // 900ms for "Ready?"
+          const timeUntilPlay = Math.max(0, readyDuration - elapsed);
+
+          readyTimeoutRef.current = setTimeout(async () => {
+            await update(gameRef, {
+              roundStatus: "playing",
+              roundStartTimestamp: serverTimestamp(),
+            });
+          }, timeUntilPlay);
+        }
+      } else if (gameData.roundStatus === "playing") {
+        setIsReady(false);
         setRoundStarted(true);
         setRoundStartTimestamp(gameData.roundStartTimestamp);
-        
-        // Clear any existing interval
-        if (checkResultIntervalRef.current) {
-          clearInterval(checkResultIntervalRef.current);
-          checkResultIntervalRef.current = null;
+
+        // Clear any existing timeouts
+        if (readyTimeoutRef.current) {
+          clearTimeout(readyTimeoutRef.current);
+          readyTimeoutRef.current = null;
         }
-        
-        // Check periodically if countdown has finished and calculate result
-        checkResultIntervalRef.current = setInterval(() => {
-          if (checkAndCalculateResultRef.current) {
-            checkAndCalculateResultRef.current(gameId);
-          }
-        }, 100); // Check every 100ms
+        if (resultTimeoutRef.current) {
+          clearTimeout(resultTimeoutRef.current);
+          resultTimeoutRef.current = null;
+        }
+
+        // Only player1 calculates the result (avoids race conditions)
+        const isPlayer1 = gameData.player1.id === playerIdRef.current;
+        if (isPlayer1 && gameData.roundStartTimestamp) {
+          const serverTime = getServerTime();
+          const elapsed = serverTime - gameData.roundStartTimestamp;
+          const countdownDuration = 3000; // 3 seconds
+          const timeUntilEnd = Math.max(0, countdownDuration - elapsed + 100); // +100ms buffer
+
+          resultTimeoutRef.current = setTimeout(async () => {
+            // Re-fetch game state to get final moves
+            const finalSnapshot = await get(gameRef);
+            if (!finalSnapshot.exists()) return;
+
+            const finalData = finalSnapshot.val();
+            if (finalData.roundStatus !== "playing" || finalData.resultCalculated) {
+              return;
+            }
+
+            const moves = finalData.moves || {};
+            const DEFAULT_MOVE: Move = "stone";
+            const player1Move = moves.player1 || DEFAULT_MOVE;
+            const player2Move = moves.player2 || DEFAULT_MOVE;
+
+            const winner = determineWinner(player1Move, player2Move);
+            const newScores = { ...finalData.scores };
+            if (winner === "player1") {
+              newScores.player1 += 1;
+            } else if (winner === "player2") {
+              newScores.player2 += 1;
+            }
+
+            await update(gameRef, {
+              resultCalculated: true,
+              scores: newScores,
+              roundStatus: "finished",
+              "moves/player1": player1Move,
+              "moves/player2": player2Move,
+            });
+          }, timeUntilEnd);
+        }
       } else if (gameData.roundStatus === "finished") {
-        // Clear interval when round is finished
-        if (checkResultIntervalRef.current) {
-          clearInterval(checkResultIntervalRef.current);
-          checkResultIntervalRef.current = null;
+        // Clear timeouts when round is finished
+        if (resultTimeoutRef.current) {
+          clearTimeout(resultTimeoutRef.current);
+          resultTimeoutRef.current = null;
         }
-        // Check if both moves are present and calculate result
+        if (readyTimeoutRef.current) {
+          clearTimeout(readyTimeoutRef.current);
+          readyTimeoutRef.current = null;
+        }
+
+        setIsReady(false);
+
+        // Process result for display
         const moves = gameData.moves || {};
         if (moves.player1 && moves.player2 && playerIdRef.current) {
           const resultKey = `${gameId}-${gameData.currentRound}`;
 
-          // Only process result once per round
           if (hasProcessedResultRef.current !== resultKey) {
             hasProcessedResultRef.current = resultKey;
 
@@ -292,15 +380,20 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
         }
         setRoundStarted(false);
       } else {
-        // Clear interval for any other status
-        if (checkResultIntervalRef.current) {
-          clearInterval(checkResultIntervalRef.current);
-          checkResultIntervalRef.current = null;
+        // waiting or any other status
+        if (resultTimeoutRef.current) {
+          clearTimeout(resultTimeoutRef.current);
+          resultTimeoutRef.current = null;
         }
+        if (readyTimeoutRef.current) {
+          clearTimeout(readyTimeoutRef.current);
+          readyTimeoutRef.current = null;
+        }
+        setIsReady(false);
         setRoundStarted(false);
       }
     });
-  }, []);
+  }, [getServerTime]);
 
   // Invite a player
   const invitePlayer = useCallback(async (targetPlayerId: string) => {
@@ -439,21 +532,21 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
       const gameData = snapshot.val();
 
       // Check if a round is already in progress
-      if (gameData.roundStatus === "playing") {
+      if (gameData.roundStatus === "playing" || gameData.roundStatus === "ready") {
         setError("A round is already in progress");
         return;
       }
 
       // Increment currentRound and reset moves
       const newRound = (gameData.currentRound || 0) + 1;
-      const now = Date.now();
 
+      // First show "Ready?" for 2 seconds, then start the countdown
       await update(gameRef, {
         currentRound: newRound,
         moves: {},
-        roundStatus: "playing",
-        roundStartTimestamp: now,
-        preCountdownTimestamp: null,
+        roundStatus: "ready",
+        readyTimestamp: serverTimestamp(), // Timestamp for "Ready?" phase
+        roundStartTimestamp: null,
         resultCalculated: false,
       });
 
@@ -497,91 +590,6 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
     }
   }, []);
 
-  // Check and calculate result atomically after countdown ends
-  const checkAndCalculateResult = useCallback(async (gameId: string) => {
-    if (!database) return;
-
-    try {
-      const gameRef = ref(database, `games/${gameId}`);
-      const snapshot = await get(gameRef);
-
-      if (!snapshot.exists()) return;
-
-      const gameData = snapshot.val();
-
-      // Only calculate if still in playing phase and not already calculated
-      if (gameData.roundStatus !== "playing" || gameData.resultCalculated) {
-        return;
-      }
-
-      const roundStartTime = gameData.roundStartTimestamp;
-      if (!roundStartTime) return;
-
-      // Check if countdown has finished (3 seconds)
-      const elapsed = Date.now() - roundStartTime;
-      const countdownDuration = 3000; // 3 seconds for SHI-FU-MI
-
-      if (elapsed < countdownDuration) {
-        return; // Countdown not finished yet
-      }
-
-      const moves = gameData.moves || {};
-      const DEFAULT_MOVE: Move = "stone";
-
-      // Use default move if player hasn't played
-      const player1Move = moves.player1 || DEFAULT_MOVE;
-      const player2Move = moves.player2 || DEFAULT_MOVE;
-
-      // Re-check resultCalculated after a small delay to handle race conditions
-      // This helps ensure only one client calculates the result
-      const doubleCheckSnapshot = await get(gameRef);
-      if (!doubleCheckSnapshot.exists()) return;
-      const doubleCheckData = doubleCheckSnapshot.val();
-      
-      if (doubleCheckData.resultCalculated || doubleCheckData.roundStatus !== "playing") {
-        return; // Another client already calculated or round status changed
-      }
-
-      // Set resultCalculated flag atomically to prevent multiple calculations
-      const updateData: Record<string, unknown> = {
-        resultCalculated: true,
-      };
-
-      // Calculate winner
-      const winner = determineWinner(player1Move, player2Move);
-
-      // Update scores
-      const newScores = { ...doubleCheckData.scores };
-      if (winner === "player1") {
-        newScores.player1 += 1;
-      } else if (winner === "player2") {
-        newScores.player2 += 1;
-      }
-
-      updateData.scores = newScores;
-      updateData.roundStatus = "finished";
-      updateData.roundStartTimestamp = null;
-
-      // Ensure both moves are stored (in case default was used)
-      const finalMoves = doubleCheckData.moves || {};
-      if (!finalMoves.player1) {
-        updateData["moves/player1"] = player1Move;
-      }
-      if (!finalMoves.player2) {
-        updateData["moves/player2"] = player2Move;
-      }
-
-      await update(gameRef, updateData);
-
-    } catch (err) {
-      console.error("Error calculating result:", err);
-    }
-  }, []);
-
-  // Update ref when function changes
-  useEffect(() => {
-    checkAndCalculateResultRef.current = checkAndCalculateResult;
-  }, [checkAndCalculateResult]);
 
   // Leave game
   const leaveGame = useCallback(async (gameId: string) => {
@@ -617,15 +625,20 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
         currentGameId: null,
       });
 
-      // Clear interval
-      if (checkResultIntervalRef.current) {
-        clearInterval(checkResultIntervalRef.current);
-        checkResultIntervalRef.current = null;
+      // Clear timeouts
+      if (resultTimeoutRef.current) {
+        clearTimeout(resultTimeoutRef.current);
+        resultTimeoutRef.current = null;
+      }
+      if (readyTimeoutRef.current) {
+        clearTimeout(readyTimeoutRef.current);
+        readyTimeoutRef.current = null;
       }
 
       setCurrentGame(null);
       setRoundStarted(false);
       setRoundResult(null);
+      setIsReady(false);
       currentGameIdRef.current = null;
 
     } catch (err) {
@@ -702,6 +715,8 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
     roundResult,
     roundStarted,
     roundStartTimestamp,
+    serverTimeOffset,
+    isReady,
     invitePlayer,
     acceptInvitation,
     declineInvitation,

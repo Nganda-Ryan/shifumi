@@ -95,6 +95,8 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
   const hasProcessedResultRef = useRef<string | null>(null);
   const resultTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const readyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const serverTimeOffsetRef = useRef<number>(0);
+  const gamesListenerInstalledRef = useRef<boolean>(false);
 
   // Connect to Firebase
   const connect = useCallback(async (username?: string) => {
@@ -158,6 +160,7 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
       const offsetRef = ref(database, ".info/serverTimeOffset");
       onValue(offsetRef, (snap) => {
         const offset = snap.val() || 0;
+        serverTimeOffsetRef.current = offset;
         setServerTimeOffset(offset);
       });
 
@@ -166,7 +169,13 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
         const playersList: Player[] = [];
         snapshot.forEach((child) => {
           const player = child.val();
-          if (child.key !== playerIdRef.current) {
+          // Skip current player and validate player data
+          if (
+            child.key !== playerIdRef.current &&
+            player &&
+            player.username &&
+            player.sessionId
+          ) {
             playersList.push({ ...player, id: child.key });
           }
         });
@@ -219,8 +228,8 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
 
   // Get estimated server time (corrected for clock skew)
   const getServerTime = useCallback(() => {
-    return Date.now() + serverTimeOffset;
-  }, [serverTimeOffset]);
+    return Date.now() + serverTimeOffsetRef.current;
+  }, []);
 
   // Start listening to game updates
   const startGameListener = useCallback((gameId: string) => {
@@ -279,7 +288,7 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
           readyTimeoutRef.current = setTimeout(async () => {
             // Get current server time and add sync delay so both players start together
             const SYNC_DELAY = 150; // 150ms buffer for network latency
-            const startTime = Date.now() + serverTimeOffset + SYNC_DELAY;
+            const startTime = Date.now() + serverTimeOffsetRef.current + SYNC_DELAY;
 
             await update(gameRef, {
               roundStatus: "playing",
@@ -600,36 +609,7 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
     if (!playerIdRef.current || !database) return;
 
     try {
-      // Stop listening to game
-      off(ref(database, `games/${gameId}`));
-
-      // Get game data to notify opponent
-      const gameRef = ref(database, `games/${gameId}`);
-      const snapshot = await get(gameRef);
-
-      if (snapshot.exists()) {
-        const gameData = snapshot.val();
-        const opponentId = gameData.player1.id === playerIdRef.current
-          ? gameData.player2.id
-          : gameData.player1.id;
-
-        // Update opponent status
-        await update(ref(database, `players/${opponentId}`), {
-          status: "available",
-          currentGameId: null,
-        });
-      }
-
-      // Delete game
-      await remove(gameRef);
-
-      // Update own status
-      await update(ref(database, `players/${playerIdRef.current}`), {
-        status: "available",
-        currentGameId: null,
-      });
-
-      // Clear timeouts
+      // Clear timeouts first
       if (resultTimeoutRef.current) {
         clearTimeout(resultTimeoutRef.current);
         resultTimeoutRef.current = null;
@@ -639,6 +619,45 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
         readyTimeoutRef.current = null;
       }
 
+      // Stop listening to game
+      off(ref(database, `games/${gameId}`));
+
+      // Get game data to notify opponent
+      const gameRef = ref(database, `games/${gameId}`);
+      const snapshot = await get(gameRef);
+
+      // Update player statuses BEFORE deleting the game
+      if (snapshot.exists()) {
+        const gameData = snapshot.val();
+        const opponentId = gameData.player1?.id === playerIdRef.current
+          ? gameData.player2?.id
+          : gameData.player1?.id;
+
+        // Update both players' statuses first
+        const updates: Record<string, unknown> = {};
+
+        if (opponentId) {
+          updates[`players/${opponentId}/status`] = "available";
+          updates[`players/${opponentId}/currentGameId`] = null;
+        }
+
+        updates[`players/${playerIdRef.current}/status`] = "available";
+        updates[`players/${playerIdRef.current}/currentGameId`] = null;
+
+        // Delete the game
+        updates[`games/${gameId}`] = null;
+
+        // Apply all updates atomically
+        await update(ref(database), updates);
+      } else {
+        // Game doesn't exist, just update own status
+        await update(ref(database, `players/${playerIdRef.current}`), {
+          status: "available",
+          currentGameId: null,
+        });
+      }
+
+      // Clear local state
       setCurrentGame(null);
       setRoundStarted(false);
       setRoundResult(null);
@@ -664,17 +683,23 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
 
   // Listen for game invitations that were accepted (for the inviter)
   useEffect(() => {
-    if (!playerIdRef.current || !database) return;
+    if (!playerId || !database) return;
+
+    // Prevent installing listener multiple times
+    if (gamesListenerInstalledRef.current) return;
+    gamesListenerInstalledRef.current = true;
 
     const gamesRef = ref(database, "games");
-    onValue(gamesRef, (snapshot) => {
+    const unsubscribe = onValue(gamesRef, (snapshot) => {
+      if (!snapshot.exists()) return;
+
       snapshot.forEach((child) => {
         const game = child.val();
         const gameId = child.key!;
 
         // Check if this player is in this game and not already listening
         if (
-          (game.player1.id === playerIdRef.current || game.player2.id === playerIdRef.current) &&
+          (game.player1?.id === playerIdRef.current || game.player2?.id === playerIdRef.current) &&
           currentGameIdRef.current !== gameId
         ) {
           currentGameIdRef.current = gameId;
@@ -693,7 +718,8 @@ export function useFirebaseGame(): UseFirebaseGameReturn {
     });
 
     return () => {
-      off(gamesRef);
+      unsubscribe();
+      gamesListenerInstalledRef.current = false;
     };
   }, [playerId, startGameListener]);
 
